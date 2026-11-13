@@ -33,6 +33,8 @@
 
 **前置**：Node.js **≥ 20.11**（推荐 22 LTS）、pnpm。
 
+pnpm 版本由 package.json 的 packageManager 字段固定为 pnpm@11.11.0，建议用 corepack enable 自动匹配。
+
 ```bash
 pnpm install
 

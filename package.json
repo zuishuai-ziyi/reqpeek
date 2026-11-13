@@ -1,6 +1,7 @@
 {
   "name": "reqpeek",
   "type": "module",
+  "packageManager": "pnpm@11.11.0",
   "engines": {
     "node": ">=20.11"
   },
