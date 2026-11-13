@@ -35,12 +35,7 @@ import { registerRawBody } from './plugins/rawBody.js';
 import { registerRequestId, requestIdOf } from './plugins/requestId.js';
 import { elapsedMs, registerTiming } from './plugins/timing.js';
 import { renderJson } from './render/json.js';
-import {
-  cspHash,
-  inlineScriptPayload,
-  inlineStylePayload,
-  renderPage,
-} from './render/page.js';
+import { cspHash, inlineScriptPayload, inlineStylePayload, renderPage } from './render/page.js';
 
 /** 启动时读进内存的静态资源（读不到就是 null，路由给 404 兜底） */
 export interface AssetBundle {

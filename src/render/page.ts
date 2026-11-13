@@ -77,9 +77,7 @@ export function renderPage(dump: RequestDump, assets?: InlineAssets): string {
   const css = assets?.css ? inlineStylePayload(assets.css) : null;
   const js = assets?.js ? inlineScriptPayload(assets.js) : null;
   const styleTag =
-    css !== null
-      ? `<style>${css}</style>`
-      : '<link rel="stylesheet" href="/_assets/app.css">';
+    css !== null ? `<style>${css}</style>` : '<link rel="stylesheet" href="/_assets/app.css">';
   const scriptTag =
     js !== null ? `<script>${js}</script>` : '<script src="/_assets/app.js" defer></script>';
 
