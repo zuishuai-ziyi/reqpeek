@@ -1,0 +1,27 @@
+{
+  "name": "reqpeek",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "dev": "node --import tsx --watch src/main.ts",
+    "build": "pnpm run build:web && tsc -p tsconfig.build.json",
+    "build:web": "esbuild src/assets/app.ts --bundle --minify --format=iife --outfile=public/app.js && esbuild src/assets/app.css --bundle --minify --outfile=public/app.css",
+    "start": "node dist/src/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fastify": "^5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9",
+    "@types/node": "^22",
+    "esbuild": "^0.24",
+    "tsx": "^4",
+    "typescript": "^5.7",
+    "vitest": "^2"
+  }
+}
