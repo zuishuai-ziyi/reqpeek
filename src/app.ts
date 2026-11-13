@@ -13,7 +13,7 @@
  * | ALL | `/*` | 同页（find-my-way 不保证 `/*` 匹配空段，故两个都注册） |
  * | ALL | `/api/echo` | 强制 JSON |
  * | GET | `/healthz` | `{"ok":true}`，不参与展示 |
- * | GET | `/_assets/app.css` `/_assets/app.js` | 启动时读入内存直接 send |
+ * | GET | `/_assets/app.css` `/_assets/app.js` | 启动时读入内存直接 send（页面已内联，路由保留供调试） |
  */
 
 import { readFileSync } from 'node:fs';
@@ -35,7 +35,12 @@ import { registerRawBody } from './plugins/rawBody.js';
 import { registerRequestId, requestIdOf } from './plugins/requestId.js';
 import { elapsedMs, registerTiming } from './plugins/timing.js';
 import { renderJson } from './render/json.js';
-import { renderPage } from './render/page.js';
+import {
+  cspHash,
+  inlineScriptPayload,
+  inlineStylePayload,
+  renderPage,
+} from './render/page.js';
 
 /** 启动时读进内存的静态资源（读不到就是 null，路由给 404 兜底） */
 export interface AssetBundle {
@@ -86,22 +91,27 @@ export function buildApp(config: Config, options: BuildAppOptions = {}): Fastify
     logger: { level: config.logLevel },
   });
 
-  // ---- 插件 ----
-  registerRawBody(app, config);
-  registerTiming(app);
-  registerRequestId(app);
-  registerSecurityHeaders(app);
-  registerGuards(app, config);
-
-  // 脱敏器整个进程复用一份（纯函数，无状态）
-  const masker: Masker = createMasker(config.maskMode);
-
   // ---- 静态资源（启动时读入内存）----
+  // 先读资源：既要把它们内联进页面，也要用内容哈希算 CSP。
   const dirs = publicDirCandidates(options);
   const assets: AssetBundle = {
     css: readAsset(dirs, 'app.css'),
     js: readAsset(dirs, 'app.js'),
   };
+  const cspHashes = {
+    style: assets.css === null ? null : cspHash(inlineStylePayload(assets.css)),
+    script: assets.js === null ? null : cspHash(inlineScriptPayload(assets.js)),
+  };
+
+  // ---- 插件 ----
+  registerRawBody(app, config);
+  registerTiming(app);
+  registerRequestId(app);
+  registerSecurityHeaders(app, cspHashes);
+  registerGuards(app, config);
+
+  // 脱敏器整个进程复用一份（纯函数，无状态）
+  const masker: Masker = createMasker(config.maskMode);
 
   // ---- 路由 ----
   app.get('/healthz', async (_request, reply) => reply.code(200).send({ ok: true }));
@@ -138,7 +148,7 @@ export function buildApp(config: Config, options: BuildAppOptions = {}): Fastify
       // 同一份 RequestDump → 同一份 JSON，strict 模式下同样走 sanitizeDump，不含明文。
       return reply.code(200).type('application/json; charset=utf-8').send(renderJson(dump));
     }
-    return reply.code(200).type('text/html; charset=utf-8').send(renderPage(dump));
+    return reply.code(200).type('text/html; charset=utf-8').send(renderPage(dump, assets));
   };
 
   // 先注册具体路径，再注册通配（find-my-way 静态优先，但顺序上也不留坑）
@@ -162,7 +172,7 @@ export function buildApp(config: Config, options: BuildAppOptions = {}): Fastify
       dump.body.kind = 'empty';
       dump.body.truncated = true;
       dump.body.text = 'body 超限未读取（已收到的字节未保留）';
-      return reply.code(413).type('text/html; charset=utf-8').send(renderPage(dump));
+      return reply.code(413).type('text/html; charset=utf-8').send(renderPage(dump, assets));
     }
 
     request.log.error({ err: error }, 'request failed');
@@ -185,7 +195,7 @@ export function buildApp(config: Config, options: BuildAppOptions = {}): Fastify
       requestId: requestIdOf(request),
     });
     dump.meta.durationMs = elapsedMs(request);
-    return reply.code(404).type('text/html; charset=utf-8').send(renderPage(dump));
+    return reply.code(404).type('text/html; charset=utf-8').send(renderPage(dump, assets));
   });
 
   return app;

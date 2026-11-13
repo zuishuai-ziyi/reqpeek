@@ -103,7 +103,16 @@ describe('renderPage · 页面骨架', () => {
     expect(page).toContain('<meta charset="utf-8">');
   });
 
-  it('引用 /_assets/app.css 与 /_assets/app.js', () => {
+  it('资源内联进页面（不再依赖 /_assets 子资源）', () => {
+    const assets = { css: ':root{--bg:#000}', js: 'console.log(1)' };
+    const page = renderPage(dumpOf({}), assets);
+    expect(page).toContain('<style>:root{--bg:#000}</style>');
+    expect(page).toContain('<script>console.log(1)</script>');
+    expect(page).not.toContain('href="/_assets/app.css"');
+    expect(page).not.toContain('src="/_assets/app.js"');
+  });
+
+  it('没有资源时退回外链（构建产物缺失时的兜底）', () => {
     const page = renderPage(dumpOf({}));
     expect(page).toContain('href="/_assets/app.css"');
     expect(page).toContain('src="/_assets/app.js"');
