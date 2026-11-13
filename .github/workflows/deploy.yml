@@ -55,6 +55,10 @@ jobs:
       - name: 代码检查
         run: pnpm lint
 
+      # tmp/ 被 .gitignore 忽略，集成测试要在仓库 tmp/ 下 mkdtemp，先确保目录存在
+      - name: 准备临时目录
+        run: mkdir -p tmp
+
       - name: 单元测试
         run: pnpm test
 
