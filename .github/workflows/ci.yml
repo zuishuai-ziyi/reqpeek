@@ -1,0 +1,55 @@
+name: CI
+
+# main 分支推送、PR 合入前都跑一遍质量门；workflow_dispatch 供手动复跑。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支只保留最新一次跑，旧跑直接取消，避免排队浪费。
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Typecheck & Lint & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.11.0
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 质量门只有这三项：类型检查 / 代码检查 / 单元测试
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 代码检查
+        run: pnpm lint
+
+      - name: 单元测试
+        run: pnpm test
+
+      # 顺带构建一次，尽早暴露 esbuild / tsc 产物问题（部署流程也会再跑一遍）
+      - name: 构建
+        run: pnpm build

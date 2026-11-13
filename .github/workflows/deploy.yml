@@ -1,0 +1,163 @@
+name: Deploy
+
+# 仅在发版（推送 v* tag）时部署；workflow_dispatch 作为手动兜底。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # 服务器上的部署目录（宝塔站点目录）
+  DEPLOY_PATH: /www/wwwroot/www.zy6.uk_81
+  # 宝塔 Node 的可执行目录（node / pnpm / pm2 都在这里）
+  NODE_BIN: /www/server/nodejs/v24.21.0/bin
+  # pm2 应用名（进程守护）
+  PM2_APP: reqpeek
+  # 应用监听端口（只监听 127.0.0.1，前面由 nginx 反代）
+  APP_PORT: '3010'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.11.0
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 部署前必须全绿
+      - name: 类型检查
+        run: pnpm typecheck
+
+      - name: 代码检查
+        run: pnpm lint
+
+      - name: 单元测试
+        run: pnpm test
+
+      - name: 构建
+        run: pnpm build
+
+      - name: 准备 SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          {
+            echo 'Host deploy-target'
+            echo "  HostName $DEPLOY_HOST"
+            echo "  Port ${DEPLOY_PORT:-22}"
+            echo "  User $DEPLOY_USER"
+            echo '  IdentityFile ~/.ssh/deploy_key'
+            echo '  IdentitiesOnly yes'
+            echo '  StrictHostKeyChecking yes'
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          ssh deploy-target 'echo "SSH 连接正常: $(hostname)"'
+
+      - name: 同步构建产物
+        env:
+          TARGET_PATH: ${{ secrets.DEPLOY_PATH || env.DEPLOY_PATH }}
+        run: |
+          # --delete 只作用于 dist/ 与 public/ 两个子目录；部署根目录不做删除，
+          # 避免误删服务器上的 .env / node_modules / 站点文件。
+          rsync -az --delete -e ssh dist/ "deploy-target:$TARGET_PATH/dist/"
+          rsync -az --delete -e ssh public/ "deploy-target:$TARGET_PATH/public/"
+          rsync -az -e ssh package.json pnpm-lock.yaml pnpm-workspace.yaml .env.example "deploy-target:$TARGET_PATH/"
+
+      - name: 安装依赖并重启服务
+        run: |
+          ssh deploy-target 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          export PATH="${{ env.NODE_BIN }}:$PATH"
+          NODE_BIN="${{ env.NODE_BIN }}"
+          APP="${{ env.DEPLOY_PATH }}"
+          NAME="${{ env.PM2_APP }}"
+
+          echo "==> 准备生产环境变量"
+          if [ ! -f "$APP/.env" ]; then
+            cp "$APP/.env.example" "$APP/.env"
+            sed -i \
+              -e 's/^HOST=.*/HOST=127.0.0.1/' \
+              -e 's/^PORT=.*/PORT=3010/' \
+              -e 's/^TRUST_PROXY=.*/TRUST_PROXY=1/' \
+              -e 's/^MASK_MODE=.*/MASK_MODE=partial/' \
+              -e 's/^LOG_LEVEL=.*/LOG_LEVEL=warn/' \
+              "$APP/.env"
+            echo "==> 已生成 $APP/.env"
+          else
+            echo "==> $APP/.env 已存在，保持原值不动"
+          fi
+          # 应用本身不解析 .env，这里导出到当前 shell，供 pm2 启动/重启时继承
+          set -a
+          . "$APP/.env"
+          set +a
+
+          echo "==> 安装生产依赖"
+          cd "$APP"
+          pnpm install --prod --frozen-lockfile
+
+          echo "==> 修正属主"
+          chown -R www:www "$APP/dist" "$APP/public" 2>/dev/null || true
+
+          echo "==> 重启服务（pm2）"
+          if pm2 describe "$NAME" >/dev/null 2>&1; then
+            pm2 restart "$NAME" --update-env
+          else
+            pm2 start "$NODE_BIN/node" --name "$NAME" --cwd "$APP" -- dist/src/main.js
+          fi
+          pm2 save
+          echo "==> 重启完成"
+          REMOTE
+
+      - name: 健康检查
+        run: |
+          ssh deploy-target 'bash -s' <<'REMOTE'
+          set -uo pipefail
+          export PATH="${{ env.NODE_BIN }}:$PATH"
+          PORT="${{ env.APP_PORT }}"
+          NAME="${{ env.PM2_APP }}"
+
+          sleep 3
+          for i in 1 2 3 4 5; do
+            if curl -fsS "http://127.0.0.1:${PORT}/healthz"; then
+              echo
+              echo "==> 健康检查通过"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "==> 健康检查失败，最近日志："
+          pm2 logs "$NAME" --lines 40 --nostream || true
+          exit 1
+          REMOTE
